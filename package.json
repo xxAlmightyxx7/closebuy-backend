@@ -1,0 +1,12 @@
+{
+  "name": "closebuy-backend",
+  "version": "1.0.0",
+  "description": "CloseBuy backend — Claude AI agent + Twilio SMS + Supabase",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
