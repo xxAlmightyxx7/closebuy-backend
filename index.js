@@ -6,14 +6,14 @@ const { URL } = require('url');
 const CONFIG = {
   supabase: {
     url:  process.env.SUPABASE_URL  || 'https://elfwiiwbusoghgzcukve.supabase.co',
-    key:  process.env.SUPABASE_KEY  || 'sb_publishable_h5_7A5caLA3fVDRA_msJNg_3c7W1_7J',
+    key:  process.env.SUPABASE_KEY,
   },
   claude: {
-    key:  process.env.CLAUDE_KEY    || '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',
+    key:  process.env.CLAUDE_KEY,
   },
   twilio: {
-    sid:  process.env.TWILIO_SID    || 'AC15cc489573c688fb2a6aacf5e31821be',
-    token:process.env.TWILIO_TOKEN  || '1f3324bda47fdacebb452b89c6a4e0a3',
+    sid:  process.env.TWILIO_SID,
+    token:process.env.TWILIO_TOKEN,
     from: process.env.TWILIO_FROM   || '+18474720466',
   }
 };
