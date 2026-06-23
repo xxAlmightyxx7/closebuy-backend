@@ -73,10 +73,18 @@ async function sendSMS(to, body) {
 }
 
 // ── CLAUDE AGENT ──
+// NOTE: now logs the raw response and throws a real error instead of
+// silently resolving to an empty string when something goes wrong.
 async function claudeAgent(systemPrompt, messages) {
   return new Promise((resolve, reject) => {
+    if (!CONFIG.claude.key) {
+      console.error('claudeAgent: CLAUDE_KEY is missing/undefined in environment');
+      reject(new Error('CLAUDE_KEY not set'));
+      return;
+    }
+
     const body = JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: 1000,
       system: systemPrompt,
       messages
@@ -96,11 +104,37 @@ async function claudeAgent(systemPrompt, messages) {
       let data = '';
       res.on('data', d => data += d);
       res.on('end', () => {
-        try { resolve(JSON.parse(data).content?.[0]?.text || ''); }
-        catch { reject(data); }
+        console.log('Claude API status:', res.statusCode);
+        console.log('Claude API raw response:', data);
+
+        let parsed;
+        try { parsed = JSON.parse(data); }
+        catch (e) {
+          console.error('claudeAgent: failed to parse Claude response as JSON', e.message);
+          reject(new Error('Claude API returned non-JSON response'));
+          return;
+        }
+
+        if (res.statusCode !== 200) {
+          console.error('claudeAgent: Claude API error', parsed.error || parsed);
+          reject(new Error(parsed.error?.message || `Claude API returned status ${res.statusCode}`));
+          return;
+        }
+
+        const text = parsed.content?.[0]?.text;
+        if (!text) {
+          console.error('claudeAgent: no text in Claude response', parsed);
+          reject(new Error('Claude API response had no text content'));
+          return;
+        }
+
+        resolve(text);
       });
     });
-    req.on('error', reject);
+    req.on('error', e => {
+      console.error('claudeAgent: request error', e.message);
+      reject(e);
+    });
     req.write(body);
     req.end();
   });
@@ -130,12 +164,27 @@ Stores:
 
 // ── CHAT HANDLER ──
 async function handleChat(sessionId, userMessage) {
-  const history = await supabase('GET', `conversations?session_id=eq.${encodeURIComponent(sessionId)}&order=created_at.asc&limit=20`);
+  let history = [];
+  try {
+    history = await supabase('GET', `conversations?session_id=eq.${encodeURIComponent(sessionId)}&order=created_at.asc&limit=20`);
+  } catch (e) {
+    console.error('handleChat: failed to load history', e.message);
+  }
+
   const messages = Array.isArray(history) ? history.map(h => ({ role: h.role, content: h.content })) : [];
   messages.push({ role: 'user', content: userMessage });
+
+  // Let errors from claudeAgent propagate up so the HTTP handler can
+  // return a real error response instead of a silent empty reply.
   const reply = await claudeAgent(AGENT_PROMPT, messages);
-  await supabase('POST', 'conversations', { session_id: sessionId, role: 'user', content: userMessage });
-  await supabase('POST', 'conversations', { session_id: sessionId, role: 'assistant', content: reply });
+
+  try {
+    await supabase('POST', 'conversations', { session_id: sessionId, role: 'user', content: userMessage });
+    await supabase('POST', 'conversations', { session_id: sessionId, role: 'assistant', content: reply });
+  } catch (e) {
+    console.error('handleChat: failed to save conversation', e.message);
+  }
+
   return reply;
 }
 
@@ -194,9 +243,15 @@ const server = http.createServer(async (req, res) => {
       if (path === '/chat' && req.method === 'POST') {
         const { sessionId, message } = data;
         if (!sessionId || !message) { res.writeHead(400); res.end(JSON.stringify({ error: 'sessionId and message required' })); return; }
-        const reply = await handleChat(sessionId, message);
-        res.writeHead(200);
-        res.end(JSON.stringify({ reply }));
+        try {
+          const reply = await handleChat(sessionId, message);
+          res.writeHead(200);
+          res.end(JSON.stringify({ reply }));
+        } catch (e) {
+          console.error('/chat error:', e.message);
+          res.writeHead(502);
+          res.end(JSON.stringify({ error: 'chat_failed', detail: e.message }));
+        }
         return;
       }
 
