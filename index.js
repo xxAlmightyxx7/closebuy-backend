@@ -141,26 +141,28 @@ async function claudeAgent(systemPrompt, messages) {
 }
 
 // ── AGENT SYSTEM PROMPT ──
-const AGENT_PROMPT = `You are the CloseBuy assistant — a friendly, bilingual (English/Spanish) helper that connects shoppers to nearby independent stores on the Algonquin Rd corridor in Rolling Meadows, IL.
+// The store list used to be hardcoded to 4 fake stores with made-up distances
+// and hours — that drifted from the real catalog the moment we seeded the
+// real 65-store database. Now it's built fresh from Supabase on every chat
+// request, so the assistant can never say something the site itself doesn't
+// also show.
+const BASE_AGENT_PROMPT = `You are the CloseBuy assistant — a friendly, bilingual (English/Spanish) helper that connects shoppers to nearby independent stores on the Algonquin Rd corridor in the Chicago suburbs (Rolling Meadows, Mount Prospect, Palatine, Wheeling, Des Plaines, and nearby towns).
 
 Your job:
-- Understand what product the customer is looking for
-- Tell them which nearby stores carry it
+- Understand what product or category the customer is looking for
+- Tell them which store(s) from the list below are likely to carry it, based on category
 - Help them send an availability request
 - Be warm, concise — max 2-3 sentences per reply
 
 Rules:
 - If customer writes in Spanish → respond in Spanish
 - If customer writes in English → respond in English
-- Never make up store information
-- If a store hasn't responded in 8 minutes, suggest the next nearest
-- Always mention store distance and hours
+- ONLY reference stores from the list below. Never invent a store, address, phone number, hours, or exact distance
+- You do NOT have real-time distance or hours data. If asked for exact distance or hours, say you don't have that on file yet and point them to the store list on the site, which shows every active store
+- If it's unclear which store fits, ask a short clarifying question
 
-Stores:
-- Primos Dollar + (0.3 mi) — Convenience, Spanish, 8am-10pm — tortillas, rice, beans, Goya, snacks, household
-- El Barrio Fresh Market (0.4 mi) — Grocery, Spanish, 7am-9pm — fresh produce, Latino groceries, plantains, Maseca, meats
-- Zam Zam Fresh Market (0.5 mi) — Grocery, Arabic/English, 9am-9pm — halal meats, Middle Eastern, rice, spices
-- Rx Pharmacy (0.6 mi) — Pharmacy, Spanish/English, 9am-7pm — medicine, vitamins, personal care`;
+Active stores (name — category, city, language):
+{{STORE_LIST}}`;
 
 // ── CHAT HANDLER ──
 async function handleChat(sessionId, userMessage) {
@@ -171,12 +173,23 @@ async function handleChat(sessionId, userMessage) {
     console.error('handleChat: failed to load history', e.message);
   }
 
+  let storeListText = '(store list temporarily unavailable — tell the customer to check the site directly)';
+  try {
+    const stores = await supabase('GET', 'stores?select=name,category,city,language&order=priority_rank.asc&active=eq.true');
+    if (Array.isArray(stores) && stores.length) {
+      storeListText = stores.map(s => `- ${s.name} — ${s.category}, ${s.city}, ${s.language || 'English'}`).join('\n');
+    }
+  } catch (e) {
+    console.error('handleChat: failed to load store list for prompt', e.message);
+  }
+  const systemPrompt = BASE_AGENT_PROMPT.replace('{{STORE_LIST}}', storeListText);
+
   const messages = Array.isArray(history) ? history.map(h => ({ role: h.role, content: h.content })) : [];
   messages.push({ role: 'user', content: userMessage });
 
   // Let errors from claudeAgent propagate up so the HTTP handler can
   // return a real error response instead of a silent empty reply.
-  const reply = await claudeAgent(AGENT_PROMPT, messages);
+  const reply = await claudeAgent(systemPrompt, messages);
 
   try {
     await supabase('POST', 'conversations', { session_id: sessionId, role: 'user', content: userMessage });
